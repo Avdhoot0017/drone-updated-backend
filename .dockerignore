@@ -1,0 +1,61 @@
+# Dependencies
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output
+dist
+
+# Environment files (will be provided at runtime)
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log
+
+# Test files
+coverage
+*.test.ts
+*.spec.ts
+__tests__
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Documentation
+*.md
+!README.md
+
+# Service account - included for production build
+# src/config/service-account.json
+
+# Certificate files (stored on S3)
+*.pfx
+*.cer
+*.pem
+src/config/SATYAWAN*.pfx
+src/config/SATYAWAN*.cer
+
+# Audio files (stored on S3)
+*.mp3
+*.mpeg
+src/config/*.mp3*

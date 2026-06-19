@@ -1,0 +1,799 @@
+// =============================================================================
+// DRONE SURVEILLANCE SYSTEM - PRISMA SCHEMA
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum UserRole {
+  admin
+  member
+  operator
+  acf
+  commissioner
+}
+
+enum UserStatus {
+  active
+  inactive
+  suspended
+}
+
+enum ObservationStatus {
+  reported
+  under_review
+  action_pending
+  action_taken
+  disposed
+  no_violation
+}
+
+enum SyncStatus {
+  started
+  in_progress
+  completed
+  failed
+}
+
+enum SyncRecordStatus {
+  new_record
+  duplicate
+  updated
+  error
+}
+
+enum DataSource {
+  sheet
+  manual
+}
+
+enum NoticeStatus {
+  draft
+  generated
+  sent
+  delivered
+  failed
+}
+
+// =============================================================================
+// MASTER TABLES
+// =============================================================================
+
+model State {
+  id        String   @id @default(uuid())
+  code      String   @unique @db.VarChar(5)
+  name      String   @db.VarChar(100)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  enforcementAreas EnforcementArea[]
+  vessels          Vessel[]
+
+  @@map("states")
+}
+
+model EnforcementArea {
+  id             String   @id @default(uuid())
+  name           String   @db.VarChar(100)
+  normalizedName String   @unique @map("normalized_name") @db.VarChar(100)
+  stateId        String?  @map("state_id")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  state            State?                    @relation(fields: [stateId], references: [id])
+  aliases          EnforcementAreaAlias[]
+  flyingLocations  FlyingLocation[]
+  observations     Observation[]
+  users            User[]
+  dailyStatistics  DailyStatistics[]
+  monthlyStatistics MonthlyStatistics[]
+  sheetTabs        SheetTab[]
+
+  @@map("enforcement_areas")
+}
+
+model EnforcementAreaAlias {
+  id                String   @id @default(uuid())
+  enforcementAreaId String   @map("enforcement_area_id")
+  aliasName         String   @unique @map("alias_name") @db.VarChar(100)
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  // Relations
+  enforcementArea EnforcementArea @relation(fields: [enforcementAreaId], references: [id], onDelete: Cascade)
+
+  @@map("enforcement_area_aliases")
+}
+
+model FlyingLocation {
+  id                String   @id @default(uuid())
+  name              String   @db.VarChar(150)
+  normalizedName    String   @map("normalized_name") @db.VarChar(150)
+  enforcementAreaId String?  @map("enforcement_area_id")
+  latitude          Decimal? @db.Decimal(10, 8)
+  longitude         Decimal? @db.Decimal(11, 8)
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  enforcementArea   EnforcementArea?       @relation(fields: [enforcementAreaId], references: [id])
+  aliases           FlyingLocationAlias[]
+  observations      Observation[]
+  dailyStatistics   DailyStatistics[]
+
+  @@unique([normalizedName, enforcementAreaId])
+  @@map("flying_locations")
+}
+
+model FlyingLocationAlias {
+  id               String   @id @default(uuid())
+  flyingLocationId String   @map("flying_location_id")
+  aliasName        String   @unique @map("alias_name") @db.VarChar(150)
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  // Relations
+  flyingLocation FlyingLocation @relation(fields: [flyingLocationId], references: [id], onDelete: Cascade)
+
+  @@map("flying_location_aliases")
+}
+
+model VesselType {
+  id             String   @id @default(uuid())
+  name           String   @db.VarChar(100)
+  normalizedName String   @unique @map("normalized_name") @db.VarChar(100)
+  description    String?  @db.Text
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  aliases VesselTypeAlias[]
+  vessels Vessel[]
+
+  @@map("vessel_types")
+}
+
+model VesselTypeAlias {
+  id           String   @id @default(uuid())
+  vesselTypeId String   @map("vessel_type_id")
+  aliasName    String   @unique @map("alias_name") @db.VarChar(100)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  vesselType VesselType @relation(fields: [vesselTypeId], references: [id], onDelete: Cascade)
+
+  @@map("vessel_type_aliases")
+}
+
+model ViolationType {
+  id            String   @id @default(uuid())
+  code          String   @unique @db.VarChar(50)
+  name          String   @db.VarChar(200)
+  description   String?  @db.Text
+  severityLevel Int      @default(1) @map("severity_level") @db.SmallInt
+  basePenalty   Decimal? @map("base_penalty") @db.Decimal(12, 2)
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  patterns              ViolationPattern[]
+  observations          Observation[]
+  penaltyConfigurations PenaltyConfiguration[]
+
+  @@map("violation_types")
+}
+
+model ViolationPattern {
+  id              String   @id @default(uuid())
+  violationTypeId String   @map("violation_type_id")
+  pattern         String   @db.Text
+  priority        Int      @default(1) @db.SmallInt
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  // Relations
+  violationType ViolationType @relation(fields: [violationTypeId], references: [id], onDelete: Cascade)
+
+  @@map("violation_patterns")
+}
+
+model FishingLicenseType {
+  id          String   @id @default(uuid())
+  code        String   @unique @db.VarChar(50)
+  name        String   @db.VarChar(200)
+  description String?  @db.Text
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  observations Observation[]
+
+  @@map("fishing_license_types")
+}
+
+model PenaltyConfiguration {
+  id              String   @id @default(uuid())
+  violationTypeId String   @map("violation_type_id")
+  occurrence      Int      @default(1) @db.SmallInt // 1st, 2nd, 3rd offense
+  baseAmount      Decimal  @default(20000) @map("base_amount") @db.Decimal(12, 2) // Fixed base: 20,000
+  penaltyAmount   Decimal  @map("penalty_amount") @db.Decimal(12, 2) // e.g., 100000, 300000, 700000
+  description     String?  @db.Text
+  isActive        Boolean  @default(true) @map("is_active")
+  createdBy       String?  @map("created_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  violationType ViolationType @relation(fields: [violationTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([violationTypeId, occurrence])
+  @@map("penalty_configurations")
+}
+
+// =============================================================================
+// CORE ENTITY TABLES
+// =============================================================================
+
+model Vessel {
+  id                   String    @id @default(uuid())
+  registrationNumber   String?   @unique @map("registration_number") @db.VarChar(50)
+  name                 String?   @db.VarChar(200)
+  vesselTypeId         String?   @map("vessel_type_id")
+  stateId              String?   @map("state_id")
+  registrationCountry  String?   @map("registration_country") @db.VarChar(10)
+  registrationState    String?   @map("registration_state") @db.VarChar(10)
+  registrationDistrict String?   @map("registration_district") @db.VarChar(10)
+  registrationCategory String?   @map("registration_category") @db.VarChar(10)
+  registrationSerial   String?   @map("registration_serial") @db.VarChar(20)
+  ownerName            String?   @map("owner_name") @db.VarChar(200)
+  ownerContact         String?   @map("owner_contact") @db.VarChar(15)
+  ownerContact2        String?   @map("owner_contact_2") @db.VarChar(15)
+  homePort             String?   @map("home_port") @db.VarChar(100)
+  isFlagged            Boolean   @default(false) @map("is_flagged")
+  flagReason           String?   @map("flag_reason") @db.Text
+  totalViolations      Int       @default(0) @map("total_violations")
+  currentRiskScore     Int       @default(0) @map("current_risk_score") @db.SmallInt
+  riskCategory         String?   @map("risk_category") @db.VarChar(20)
+  firstObservedAt      DateTime? @map("first_observed_at")
+  lastObservedAt       DateTime? @map("last_observed_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  vesselType   VesselType?         @relation(fields: [vesselTypeId], references: [id])
+  state        State?              @relation(fields: [stateId], references: [id])
+  nameHistory  VesselNameHistory[]
+  observations Observation[]
+
+  @@index([isFlagged])
+  @@index([name])
+  @@map("vessels")
+}
+
+model VesselNameHistory {
+  id               String   @id @default(uuid())
+  vesselId         String   @map("vessel_id")
+  nameObserved     String   @map("name_observed") @db.VarChar(200)
+  firstSeenAt      DateTime @default(now()) @map("first_seen_at")
+  lastSeenAt       DateTime @default(now()) @map("last_seen_at")
+  observationCount Int      @default(1) @map("observation_count")
+
+  // Relations
+  vessel Vessel @relation(fields: [vesselId], references: [id], onDelete: Cascade)
+
+  @@unique([vesselId, nameObserved])
+  @@map("vessel_name_history")
+}
+
+model Observation {
+  id                   String            @id @default(uuid())
+  caseNumber           String?           @unique @map("case_number") @db.VarChar(50) // Auto-generated case number
+  uniqueKey            String            @unique @map("unique_key") @db.VarChar(255)
+  dataSource           DataSource        @default(sheet) @map("data_source") // sheet or manual
+  enforcementAreaId    String            @map("enforcement_area_id")
+  flyingLocationId     String            @map("flying_location_id")
+  vesselId             String?           @map("vessel_id")
+  violationTypeId      String?           @map("violation_type_id")
+  fishingLicenseTypeId String?           @map("fishing_license_type_id")
+  originalSrNo         Int?              @map("original_sr_no")
+  originalVesselName   String?           @map("original_vessel_name") @db.VarChar(200)
+  originalVesselReg    String?           @map("original_vessel_reg") @db.VarChar(50)
+  originalVesselType   String?           @map("original_vessel_type") @db.VarChar(100)
+  originalViolationText String?          @map("original_violation_text") @db.Text
+
+  // Owner details (for manual entry)
+  ownerName            String?           @map("owner_name") @db.VarChar(200)
+  ownerEmail           String?           @map("owner_email") @db.VarChar(255)
+  ownerContact1        String?           @map("owner_contact_1") @db.VarChar(15)
+  ownerContact2        String?           @map("owner_contact_2") @db.VarChar(15)
+
+  // Location details
+  latitude             Decimal?          @db.Decimal(10, 8)
+  longitude            Decimal?          @db.Decimal(11, 8)
+  latitudeDms          String?           @map("latitude_dms") @db.VarChar(50)
+  longitudeDms         String?           @map("longitude_dms") @db.VarChar(50)
+
+  // Date/Time
+  observationDate      DateTime          @map("observation_date") @db.Date
+  observationTime      DateTime?         @map("observation_time") @db.Time()
+  observationDatetime  DateTime?         @map("observation_datetime")
+
+  // Distance
+  distanceFromCoastKm  Decimal?          @map("distance_from_coast_km") @db.Decimal(6, 2)
+  distanceRaw          String?           @map("distance_raw") @db.VarChar(20)
+
+  // Penalty details
+  offenceOccurrence    Int               @default(1) @map("offence_occurrence") @db.SmallInt // 1st, 2nd, 3rd...
+  detectedPenalty      Decimal?          @map("detected_penalty") @db.Decimal(12, 2) // Expected penalty from sheet
+  penaltyAmount        Decimal?          @map("penalty_amount") @db.Decimal(12, 2)
+  paidPenaltyAmount    Decimal?          @map("paid_penalty_amount") @db.Decimal(12, 2) // Amount paid by owner
+
+  // Status
+  status               ObservationStatus @default(reported)
+  statusUpdatedAt      DateTime?         @map("status_updated_at")
+  statusUpdatedBy      String?           @map("status_updated_by")
+  disposalReason       String?           @map("disposal_reason") @db.Text // Reason when disposed
+  disposedAt           DateTime?         @map("disposed_at")
+  disposedBy           String?           @map("disposed_by")
+
+  // Remarks
+  remarksAcf           String?           @map("remarks_acf") @db.Text
+  remarksHo            String?           @map("remarks_ho") @db.Text
+  internalNotes        String?           @map("internal_notes") @db.Text
+
+  // Source tracking
+  sourceSheetName      String?           @map("source_sheet_name") @db.VarChar(100)
+  syncBatchId          String?           @map("sync_batch_id")
+  createdByUserId      String?           @map("created_by_user_id") // Who created (for manual entry)
+
+  // Computed time dimensions
+  observationHour      Int?              @map("observation_hour") @db.SmallInt
+  observationDayOfWeek Int?              @map("observation_day_of_week") @db.SmallInt
+  observationWeek      Int?              @map("observation_week") @db.SmallInt
+  observationMonth     Int?              @map("observation_month") @db.SmallInt
+  observationQuarter   Int?              @map("observation_quarter") @db.SmallInt
+  observationYear      Int?              @map("observation_year")
+  fiscalYear           Int?              @map("fiscal_year")
+
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  enforcementArea    EnforcementArea       @relation(fields: [enforcementAreaId], references: [id])
+  flyingLocation     FlyingLocation        @relation(fields: [flyingLocationId], references: [id])
+  vessel             Vessel?               @relation(fields: [vesselId], references: [id])
+  violationType      ViolationType?        @relation(fields: [violationTypeId], references: [id])
+  fishingLicenseType FishingLicenseType?   @relation(fields: [fishingLicenseTypeId], references: [id])
+  syncBatch          SyncBatch?            @relation(fields: [syncBatchId], references: [id])
+  evidence           ObservationEvidence[]
+  actionReports      ActionReport[]
+  penalty            Penalty?
+  history            ObservationHistory[]
+  notices            CaseNotice[]
+  emailLogs          CaseEmailLog[]
+
+  @@index([observationDate])
+  @@index([status])
+  @@index([dataSource])
+  @@index([enforcementAreaId, observationDate])
+  @@index([flyingLocationId, observationDate])
+  @@map("observations")
+}
+
+model ObservationEvidence {
+  id            String    @id @default(uuid())
+  observationId String    @map("observation_id")
+  evidenceUrl   String    @map("evidence_url") @db.Text
+  evidenceType  String    @default("image") @map("evidence_type") @db.VarChar(20)
+  fileName      String?   @map("file_name") @db.VarChar(255)
+  fileSizeBytes BigInt?   @map("file_size_bytes")
+  mimeType      String?   @map("mime_type") @db.VarChar(100)
+  isPrimary     Boolean   @default(false) @map("is_primary")
+  capturedAt    DateTime? @map("captured_at")
+  uploadedAt    DateTime  @default(now()) @map("uploaded_at")
+  localPath     String?   @map("local_path") @db.Text
+  isCached      Boolean   @default(false) @map("is_cached")
+  s3Key         String?   @map("s3_key") @db.VarChar(500)
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  observation Observation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@index([observationId])
+  @@map("observation_evidence")
+}
+
+model CaseNotice {
+  id              String       @id @default(uuid())
+  observationId   String       @map("observation_id")
+  noticeNumber    String       @unique @map("notice_number") @db.VarChar(50)
+  noticeType      String       @default("violation") @map("notice_type") @db.VarChar(50)
+  status          NoticeStatus @default(draft)
+  generatedAt     DateTime     @default(now()) @map("generated_at")
+  sentAt          DateTime?    @map("sent_at")
+  documentUrl     String?      @map("document_url") @db.Text
+  s3Key           String?      @map("s3_key") @db.VarChar(500)
+
+  // Communication tracking
+  emailSentAt     DateTime?    @map("email_sent_at")
+  emailStatus     String?      @map("email_status") @db.VarChar(50)
+  smsSentAt       DateTime?    @map("sms_sent_at")
+  smsStatus       String?      @map("sms_status") @db.VarChar(50)
+  whatsappSentAt  DateTime?    @map("whatsapp_sent_at")
+  whatsappStatus  String?      @map("whatsapp_status") @db.VarChar(50)
+  callMadeAt      DateTime?    @map("call_made_at")
+  callStatus      String?      @map("call_status") @db.VarChar(50)
+  callRecordingUrl String?     @map("call_recording_url") @db.Text
+
+  generatedBy     String?      @map("generated_by")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  observation Observation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@index([observationId])
+  @@index([status])
+  @@map("case_notices")
+}
+
+// Email Log - tracks emails sent for cases
+model CaseEmailLog {
+  id              String   @id @default(uuid())
+  observationId   String   @map("observation_id")
+  recipientEmail  String   @map("recipient_email") @db.VarChar(255)
+  recipientRole   String   @map("recipient_role") @db.VarChar(50)
+  status          String   @default("pending") @db.VarChar(50)
+  messageId       String?  @map("message_id") @db.VarChar(255)
+  errorMessage    String?  @map("error_message") @db.Text
+  sentAt          DateTime @default(now()) @map("sent_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  // Relations
+  observation Observation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@index([observationId])
+  @@index([recipientEmail])
+  @@index([status])
+  @@map("case_email_logs")
+}
+
+// =============================================================================
+// ACTION & PENALTY TABLES
+// =============================================================================
+
+model ActionReport {
+  id                String   @id @default(uuid())
+  observationId     String   @map("observation_id")
+  actionDate        DateTime? @map("action_date") @db.Date
+  actionDescription String?  @map("action_description") @db.Text
+  actionTakenBy     String?  @map("action_taken_by") @db.VarChar(200)
+  actionOffice      String?  @map("action_office") @db.VarChar(200)
+  originalValue     String?  @map("original_value") @db.Text
+  createdBy         String?  @map("created_by")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  observation Observation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@index([observationId])
+  @@map("action_reports")
+}
+
+model Penalty {
+  id                  String    @id @default(uuid())
+  observationId       String    @unique @map("observation_id")
+  fishAuctionAmount   Decimal   @default(0) @map("fish_auction_amount") @db.Decimal(12, 2)
+  fishAuctionDate     DateTime? @map("fish_auction_date") @db.Date
+  fishAuctionLocation String?   @map("fish_auction_location") @db.VarChar(200)
+  penaltyImposed      Decimal   @default(0) @map("penalty_imposed") @db.Decimal(12, 2)
+  penaltyImposedDate  DateTime? @map("penalty_imposed_date") @db.Date
+  penaltyOrderNumber  String?   @map("penalty_order_number") @db.VarChar(100)
+  penaltyRecovered    Decimal   @default(0) @map("penalty_recovered") @db.Decimal(12, 2)
+  recoveryDate        DateTime? @map("recovery_date") @db.Date
+  recoveryMode        String?   @map("recovery_mode") @db.VarChar(50)
+  receiptNumber       String?   @map("receipt_number") @db.VarChar(100)
+  remarks             String?   @db.Text
+  createdBy           String?   @map("created_by")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  observation Observation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@map("penalties")
+}
+
+// =============================================================================
+// USER MANAGEMENT TABLES
+// =============================================================================
+
+model User {
+  id                  String     @id @default(uuid())
+  userId              String     @unique @map("user_id") @db.VarChar(50)
+  email               String?    @unique @db.VarChar(255)
+  passwordHash        String     @map("password_hash") @db.VarChar(255)
+  fullName            String     @map("full_name") @db.VarChar(200)
+  phone               String?    @db.VarChar(20)
+  designation         String?    @db.VarChar(100)
+  role                UserRole   @default(member)
+  status              UserStatus @default(active)
+  enforcementAreaId   String?    @map("enforcement_area_id")
+  canViewAllAreas     Boolean    @default(false) @map("can_view_all_areas")
+  signaturePath       String?    @map("signature_path") @db.VarChar(500)
+
+  // Digital Signature Certificate (for ACF users)
+  // Certificate file (.cer/.pem) and Private key file (.pfx/.p12)
+  certS3Key           String?    @map("cert_s3_key") @db.VarChar(500)
+  pfxS3Key            String?    @map("pfx_s3_key") @db.VarChar(500)
+  pfxPassword         String?    @map("pfx_password") @db.VarChar(255)
+  certificateExpiry   DateTime?  @map("certificate_expiry")
+  certificateSubject  String?    @map("certificate_subject") @db.VarChar(500)
+
+  passwordChangedAt   DateTime?  @map("password_changed_at")
+  mustChangePassword  Boolean    @default(true) @map("must_change_password")
+  failedLoginAttempts Int        @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime?  @map("locked_until")
+  lastLoginAt         DateTime?  @map("last_login_at")
+  lastLoginIp         String?    @map("last_login_ip") @db.VarChar(45)
+  createdBy           String?    @map("created_by")
+  createdAt           DateTime   @default(now()) @map("created_at")
+  updatedAt           DateTime   @updatedAt @map("updated_at")
+
+  // Relations
+  enforcementArea EnforcementArea?    @relation(fields: [enforcementAreaId], references: [id])
+  sessions        UserSession[]
+  resetTokens     PasswordResetToken[]
+  activityLogs    UserActivityLog[]
+  syncBatches     SyncBatch[]
+
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+model UserSession {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash") @db.VarChar(255)
+  ipAddress String?  @map("ip_address") @db.VarChar(45)
+  userAgent String?  @map("user_agent") @db.Text
+  expiresAt DateTime @map("expires_at")
+  isValid   Boolean  @default(true) @map("is_valid")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model UserActivityLog {
+  id         String   @id @default(uuid())
+  userId     String?  @map("user_id")
+  action     String   @db.VarChar(100)
+  entityType String?  @map("entity_type") @db.VarChar(50)
+  entityId   String?  @map("entity_id")
+  details    Json?
+  ipAddress  String?  @map("ip_address") @db.VarChar(45)
+  userAgent  String?  @map("user_agent") @db.Text
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("user_activity_logs")
+}
+
+// =============================================================================
+// SYNC & AUDIT TABLES
+// =============================================================================
+
+model GoogleSheetConfig {
+  id                  String    @id @default(uuid())
+  name                String    @db.VarChar(100)
+  sheetId             String    @unique @map("sheet_id") @db.VarChar(100)
+  sheetUrl            String?   @map("sheet_url") @db.Text
+  isActive            Boolean   @default(true) @map("is_active")
+  syncEnabled         Boolean   @default(true) @map("sync_enabled")
+  syncSchedule        String    @default("0 20 * * *") @map("sync_schedule") @db.VarChar(50)
+  lastSyncAt          DateTime? @map("last_sync_at")
+  nextSyncAt          DateTime? @map("next_sync_at")
+  lastModifiedTime    DateTime? @map("last_modified_time")
+  serviceAccountEmail String?   @map("service_account_email") @db.VarChar(255)
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  tabs        SheetTab[]
+  syncBatches SyncBatch[]
+
+  @@map("google_sheet_configs")
+}
+
+model SheetTab {
+  id                   String    @id @default(uuid())
+  googleSheetConfigId  String    @map("google_sheet_config_id")
+  tabName              String    @map("tab_name") @db.VarChar(100)
+  enforcementAreaId    String?   @map("enforcement_area_id")
+  isActive             Boolean   @default(true) @map("is_active")
+  headerRow            Int       @default(1) @map("header_row")
+  dataStartRow         Int       @default(2) @map("data_start_row")
+  lastRowSynced        Int       @default(0) @map("last_row_synced")
+  lastSyncAt           DateTime? @map("last_sync_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  googleSheetConfig GoogleSheetConfig @relation(fields: [googleSheetConfigId], references: [id], onDelete: Cascade)
+  enforcementArea   EnforcementArea?  @relation(fields: [enforcementAreaId], references: [id])
+  syncRecords       SyncRecord[]
+
+  @@unique([googleSheetConfigId, tabName])
+  @@map("sheet_tabs")
+}
+
+model SyncBatch {
+  id                   String     @id @default(uuid())
+  googleSheetConfigId  String     @map("google_sheet_config_id")
+  startedAt            DateTime   @default(now()) @map("started_at")
+  completedAt          DateTime?  @map("completed_at")
+  durationMs           Int?       @map("duration_ms")
+  status               SyncStatus @default(started)
+  totalRowsScanned     Int        @default(0) @map("total_rows_scanned")
+  newRecordsAdded      Int        @default(0) @map("new_records_added")
+  duplicateRecords     Int        @default(0) @map("duplicate_records")
+  updatedRecords       Int        @default(0) @map("updated_records")
+  errorRecords         Int        @default(0) @map("error_records")
+  errorMessage         String?    @map("error_message") @db.Text
+  errorStack           String?    @map("error_stack") @db.Text
+  triggeredBy          String     @default("scheduled") @map("triggered_by") @db.VarChar(50)
+  triggeredByUserId    String?    @map("triggered_by_user_id")
+  createdAt            DateTime   @default(now()) @map("created_at")
+
+  // Relations
+  googleSheetConfig GoogleSheetConfig @relation(fields: [googleSheetConfigId], references: [id])
+  triggeredByUser   User?             @relation(fields: [triggeredByUserId], references: [id])
+  syncRecords       SyncRecord[]
+  observations      Observation[]
+
+  @@index([status])
+  @@index([startedAt])
+  @@map("sync_batches")
+}
+
+model SyncRecord {
+  id            String           @id @default(uuid())
+  syncBatchId   String           @map("sync_batch_id")
+  sheetTabId    String?          @map("sheet_tab_id")
+  rowNumber     Int              @map("row_number")
+  uniqueKey     String?          @map("unique_key") @db.VarChar(255)
+  status        SyncRecordStatus
+  observationId String?          @map("observation_id")
+  rawData       Json?            @map("raw_data")
+  errorMessage  String?          @map("error_message") @db.Text
+  errorField    String?          @map("error_field") @db.VarChar(50)
+  processedAt   DateTime         @default(now()) @map("processed_at")
+
+  // Relations
+  syncBatch SyncBatch @relation(fields: [syncBatchId], references: [id], onDelete: Cascade)
+  sheetTab  SheetTab? @relation(fields: [sheetTabId], references: [id])
+
+  @@index([syncBatchId])
+  @@index([status])
+  @@map("sync_records")
+}
+
+model ObservationHistory {
+  id            String   @id @default(uuid())
+  observationId String   @map("observation_id")
+  changedBy     String?  @map("changed_by")
+  changeType    String   @map("change_type") @db.VarChar(20)
+  fieldChanged  String?  @map("field_changed") @db.VarChar(100)
+  oldValue      String?  @map("old_value") @db.Text
+  newValue      String?  @map("new_value") @db.Text
+  changeReason  String?  @map("change_reason") @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  observation Observation @relation(fields: [observationId], references: [id], onDelete: Cascade)
+
+  @@index([observationId])
+  @@index([createdAt])
+  @@map("observation_history")
+}
+
+// =============================================================================
+// STATISTICS TABLES
+// =============================================================================
+
+model DailyStatistics {
+  id                    String   @id @default(uuid())
+  statDate              DateTime @map("stat_date") @db.Date
+  enforcementAreaId     String?  @map("enforcement_area_id")
+  flyingLocationId      String?  @map("flying_location_id")
+  totalObservations     Int      @default(0) @map("total_observations")
+  uniqueVessels         Int      @default(0) @map("unique_vessels")
+  newVessels            Int      @default(0) @map("new_vessels")
+  repeatOffenders       Int      @default(0) @map("repeat_offenders")
+  violationsByType      Json?    @map("violations_by_type")
+  vesselsByType         Json?    @map("vessels_by_type")
+  statusBreakdown       Json?    @map("status_breakdown")
+  totalPenaltyImposed   Decimal  @default(0) @map("total_penalty_imposed") @db.Decimal(12, 2)
+  totalPenaltyRecovered Decimal  @default(0) @map("total_penalty_recovered") @db.Decimal(12, 2)
+  totalFishAuction      Decimal  @default(0) @map("total_fish_auction") @db.Decimal(12, 2)
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  enforcementArea EnforcementArea? @relation(fields: [enforcementAreaId], references: [id])
+  flyingLocation  FlyingLocation?  @relation(fields: [flyingLocationId], references: [id])
+
+  @@unique([statDate, enforcementAreaId, flyingLocationId])
+  @@index([statDate])
+  @@map("daily_statistics")
+}
+
+model MonthlyStatistics {
+  id                     String   @id @default(uuid())
+  statYear               Int      @map("stat_year")
+  statMonth              Int      @map("stat_month") @db.SmallInt
+  enforcementAreaId      String?  @map("enforcement_area_id")
+  totalObservations      Int      @default(0) @map("total_observations")
+  totalUniqueVessels     Int      @default(0) @map("total_unique_vessels")
+  totalNewVessels        Int      @default(0) @map("total_new_vessels")
+  totalRepeatOffenders   Int      @default(0) @map("total_repeat_offenders")
+  violationsByType       Json?    @map("violations_by_type")
+  vesselsByType          Json?    @map("vessels_by_type")
+  observationsByLocation Json?    @map("observations_by_location")
+  statusBreakdown        Json?    @map("status_breakdown")
+  totalPenaltyImposed    Decimal  @default(0) @map("total_penalty_imposed") @db.Decimal(12, 2)
+  totalPenaltyRecovered  Decimal  @default(0) @map("total_penalty_recovered") @db.Decimal(12, 2)
+  totalFishAuction       Decimal  @default(0) @map("total_fish_auction") @db.Decimal(12, 2)
+  vsPreviousMonthPct     Decimal? @map("vs_previous_month_pct") @db.Decimal(5, 2)
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  enforcementArea EnforcementArea? @relation(fields: [enforcementAreaId], references: [id])
+
+  @@unique([statYear, statMonth, enforcementAreaId])
+  @@index([statYear, statMonth])
+  @@map("monthly_statistics")
+}
