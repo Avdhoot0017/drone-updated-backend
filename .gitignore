@@ -50,3 +50,7 @@ src/config/SATYAWAN*.cer
 *.mp3
 *.mpeg
 src/config/*.mp3*
+
+# Docker
+Dockerfile
+docker-compose.yml

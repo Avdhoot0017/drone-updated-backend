@@ -11,13 +11,16 @@ import { AuthenticatedRequest } from '../types';
 
 /**
  * POST /sync/run
+ * @body cleanupStale - If true, removes records from DB that are no longer in the sheet
  */
 export const runSync = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-  const result = await syncService.runSync('manual', req.user!.id);
+  const { cleanupStale = true } = req.body || {};  // Default to true for auto-cleanup
+
+  const result = await syncService.runSync('manual', req.user!.id, cleanupStale);
 
   res.json({
     success: true,
-    message: 'Sync completed',
+    message: cleanupStale ? 'Sync completed with stale cleanup' : 'Sync completed',
     data: result,
   });
 };

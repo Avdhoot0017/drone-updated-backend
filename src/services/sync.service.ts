@@ -17,8 +17,11 @@ import { SyncStatus, SyncRecordStatus, ObservationStatus } from '@prisma/client'
 class SyncService {
   /**
    * Run full sync from Google Sheets
+   * @param triggeredBy - Who triggered the sync
+   * @param userId - User ID if triggered by user
+   * @param cleanupStale - If true, removes records not in sheet (default: true)
    */
-  async runSync(triggeredBy: string = 'scheduled', userId?: string): Promise<SyncResult> {
+  async runSync(triggeredBy: string = 'scheduled', userId?: string, cleanupStale: boolean = true): Promise<SyncResult> {
     const startTime = Date.now();
     let syncBatch;
 
@@ -29,7 +32,11 @@ class SyncService {
       unchangedRecords: 0,
       errors: 0,
       errorDetails: [],
+      staleRecordsRemoved: 0,
     };
+
+    // Track all uniqueKeys seen in this sync (for stale detection)
+    const seenUniqueKeys = new Set<string>();
 
     try {
       // Get or create sheet config
@@ -143,18 +150,25 @@ class SyncService {
                 syncRecordStatus = SyncRecordStatus.duplicate;
               }
 
+              // Generate uniqueKey for this row (must match processRow logic)
+              const rowDate = row.date instanceof Date ? row.date : (row.date ? new Date(row.date) : null);
+              const rowUniqueKey = generateObservationUniqueKey(
+                row.flyingLocation,
+                row.vesselRegNo,
+                rowDate,
+                row.time
+              );
+
+              // Track this key for stale detection
+              seenUniqueKeys.add(rowUniqueKey);
+
               // Record sync result
               await prisma.syncRecord.create({
                 data: {
                   syncBatchId: syncBatch.id,
                   sheetTabId: tab.id,
                   rowNumber,
-                  uniqueKey: generateObservationUniqueKey(
-                    row.flyingLocation,
-                    row.vesselRegNo,
-                    row.date instanceof Date ? row.date : null,
-                    row.time
-                  ),
+                  uniqueKey: rowUniqueKey,
                   status: syncRecordStatus,
                   rawData: row as object,
                 },
@@ -194,6 +208,47 @@ class SyncService {
         } catch (error) {
           logger.error(`Error processing tab ${tab.tabName}:`, error);
         }
+      }
+
+      // Cleanup stale records (records in DB but not in sheet)
+      // Safety: Only cleanup if we have a reasonable number of records from sheet
+      // This prevents accidental mass deletion if sheet API fails or returns empty
+      const MIN_RECORDS_FOR_CLEANUP = 100;
+
+      if (cleanupStale && seenUniqueKeys.size >= MIN_RECORDS_FOR_CLEANUP) {
+        logger.info(`Checking for stale records. Seen ${seenUniqueKeys.size} unique keys in sheet.`);
+
+        // Get all observation uniqueKeys from database
+        const allObservations = await prisma.observation.findMany({
+          select: { id: true, uniqueKey: true },
+        });
+
+        // Find stale records (in DB but not in current sheet)
+        const staleObservations = allObservations.filter(
+          (obs) => !seenUniqueKeys.has(obs.uniqueKey)
+        );
+
+        if (staleObservations.length > 0) {
+          logger.info(`Found ${staleObservations.length} stale records. Removing...`);
+
+          // Delete stale records (with related data)
+          const staleIds = staleObservations.map((obs) => obs.id);
+
+          await prisma.$transaction([
+            prisma.penalty.deleteMany({ where: { observationId: { in: staleIds } } }),
+            prisma.observationEvidence.deleteMany({ where: { observationId: { in: staleIds } } }),
+            prisma.actionReport.deleteMany({ where: { observationId: { in: staleIds } } }),
+            prisma.observationHistory.deleteMany({ where: { observationId: { in: staleIds } } }),
+            prisma.observation.deleteMany({ where: { id: { in: staleIds } } }),
+          ]);
+
+          result.staleRecordsRemoved = staleObservations.length;
+          logger.info(`Removed ${staleObservations.length} stale records.`);
+        } else {
+          logger.info('No stale records found.');
+        }
+      } else if (cleanupStale && seenUniqueKeys.size < MIN_RECORDS_FOR_CLEANUP) {
+        logger.warn(`Skipping stale cleanup: Only ${seenUniqueKeys.size} records found in sheet (minimum: ${MIN_RECORDS_FOR_CLEANUP}). This is a safety measure to prevent accidental data loss.`);
       }
 
       // Update sync batch
@@ -405,7 +460,7 @@ class SyncService {
 
   /**
    * Update existing observation record with new data from sheet
-   * Compares and updates: penalty, status, remarks, amounts
+   * ALWAYS syncs: penalty, status, remarks, amounts from sheet (sheet is source of truth)
    */
   private async updateExistingRecord(
     existing: {
@@ -423,26 +478,25 @@ class SyncService {
     },
     row: SheetRow
   ): Promise<'updated' | 'unchanged'> {
-    let hasChanges = false;
-    const observationUpdates: Record<string, unknown> = {};
-    const penaltyUpdates: Record<string, unknown> = {};
-
     // Helper to get numeric value from Decimal or number
-    const toNumber = (val: number | null | { toNumber: () => number } | undefined): number | null => {
-      if (val === null || val === undefined) return null;
+    const toNumber = (val: number | null | { toNumber: () => number } | undefined): number => {
+      if (val === null || val === undefined) return 0;
       if (typeof val === 'number') return val;
       if (typeof val === 'object' && 'toNumber' in val) return val.toNumber();
-      return null;
+      return 0;
     };
 
-    // Parse new values from sheet
-    const newDetectedPenalty = row.expectedPenalty ? parseFloat(String(row.expectedPenalty)) : null;
+    // Helper to compare numbers with tolerance (for floating point)
+    const numEqual = (a: number, b: number): boolean => Math.abs(a - b) < 0.01;
+
+    // Parse new values from sheet (sheet is source of truth)
+    const newDetectedPenalty = row.expectedPenalty ? parseFloat(String(row.expectedPenalty)) : 0;
     const newPenaltyImposed = row.penaltyImposed ? parseFloat(String(row.penaltyImposed)) : 0;
     const newPenaltyRecovered = row.penaltyRecovered ? parseFloat(String(row.penaltyRecovered)) : 0;
     const newFishAuctionAmount = row.fishAuctionAmount ? parseFloat(String(row.fishAuctionAmount)) : 0;
 
     // Determine new status from finalVerdict
-    let newStatus: ObservationStatus | null = null;
+    let newStatus: ObservationStatus = ObservationStatus.reported;
     if (row.finalVerdict) {
       const verdict = row.finalVerdict.toLowerCase().trim();
       if (verdict === 'disposed') {
@@ -452,46 +506,37 @@ class SyncService {
       }
     }
 
-    // Compare and prepare observation updates
+    // Get existing values
     const existingDetectedPenalty = toNumber(existing.detectedPenalty);
-    if (newDetectedPenalty !== null && newDetectedPenalty !== existingDetectedPenalty) {
-      observationUpdates.detectedPenalty = newDetectedPenalty;
+    const existingPenaltyImposed = toNumber(existing.penalty?.penaltyImposed);
+    const existingPenaltyRecovered = toNumber(existing.penalty?.penaltyRecovered);
+    const existingFishAuctionAmount = toNumber(existing.penalty?.fishAuctionAmount);
+
+    // Check for any changes
+    let hasChanges = false;
+
+    // Always check and update detected penalty
+    if (!numEqual(newDetectedPenalty, existingDetectedPenalty)) {
       hasChanges = true;
     }
 
-    if (row.remarksAcf && row.remarksAcf !== existing.remarksAcf) {
-      observationUpdates.remarksAcf = row.remarksAcf;
+    // Check remarks changes
+    if ((row.remarksAcf || '') !== (existing.remarksAcf || '')) {
+      hasChanges = true;
+    }
+    if ((row.remarksHo || '') !== (existing.remarksHo || '')) {
       hasChanges = true;
     }
 
-    if (row.remarksHo && row.remarksHo !== existing.remarksHo) {
-      observationUpdates.remarksHo = row.remarksHo;
+    // Check status change
+    if (newStatus !== existing.status) {
       hasChanges = true;
     }
 
-    if (newStatus && newStatus !== existing.status) {
-      observationUpdates.status = newStatus;
-      observationUpdates.statusUpdatedAt = new Date();
-      hasChanges = true;
-    }
-
-    // Compare and prepare penalty updates
-    const existingPenaltyImposed = toNumber(existing.penalty?.penaltyImposed) || 0;
-    const existingPenaltyRecovered = toNumber(existing.penalty?.penaltyRecovered) || 0;
-    const existingFishAuctionAmount = toNumber(existing.penalty?.fishAuctionAmount) || 0;
-
-    if (newPenaltyImposed !== existingPenaltyImposed) {
-      penaltyUpdates.penaltyImposed = newPenaltyImposed;
-      hasChanges = true;
-    }
-
-    if (newPenaltyRecovered !== existingPenaltyRecovered) {
-      penaltyUpdates.penaltyRecovered = newPenaltyRecovered;
-      hasChanges = true;
-    }
-
-    if (newFishAuctionAmount !== existingFishAuctionAmount) {
-      penaltyUpdates.fishAuctionAmount = newFishAuctionAmount;
+    // Check penalty amounts
+    if (!numEqual(newPenaltyImposed, existingPenaltyImposed) ||
+        !numEqual(newPenaltyRecovered, existingPenaltyRecovered) ||
+        !numEqual(newFishAuctionAmount, existingFishAuctionAmount)) {
       hasChanges = true;
     }
 
@@ -500,40 +545,43 @@ class SyncService {
       return 'unchanged';
     }
 
-    // Apply observation updates
-    if (Object.keys(observationUpdates).length > 0) {
-      observationUpdates.updatedAt = new Date();
-      await prisma.observation.update({
-        where: { id: existing.id },
-        data: observationUpdates,
+    // ALWAYS update observation with sheet values (force sync)
+    await prisma.observation.update({
+      where: { id: existing.id },
+      data: {
+        detectedPenalty: newDetectedPenalty,
+        remarksAcf: row.remarksAcf || existing.remarksAcf,
+        remarksHo: row.remarksHo || existing.remarksHo,
+        status: newStatus,
+        statusUpdatedAt: newStatus !== existing.status ? new Date() : undefined,
+        updatedAt: new Date(),
+      },
+    });
+
+    // ALWAYS upsert penalty record with sheet values
+    if (existing.penalty) {
+      await prisma.penalty.update({
+        where: { id: existing.penalty.id },
+        data: {
+          penaltyImposed: newPenaltyImposed,
+          penaltyRecovered: newPenaltyRecovered,
+          fishAuctionAmount: newFishAuctionAmount,
+          updatedAt: new Date(),
+        },
+      });
+    } else {
+      // Create penalty record even if all zeros (for consistency)
+      await prisma.penalty.create({
+        data: {
+          observationId: existing.id,
+          penaltyImposed: newPenaltyImposed,
+          penaltyRecovered: newPenaltyRecovered,
+          fishAuctionAmount: newFishAuctionAmount,
+        },
       });
     }
 
-    // Apply penalty updates (upsert - create if not exists)
-    if (Object.keys(penaltyUpdates).length > 0 || (newPenaltyImposed > 0 || newPenaltyRecovered > 0 || newFishAuctionAmount > 0)) {
-      if (existing.penalty) {
-        // Update existing penalty
-        await prisma.penalty.update({
-          where: { id: existing.penalty.id },
-          data: {
-            ...penaltyUpdates,
-            updatedAt: new Date(),
-          },
-        });
-      } else if (newPenaltyImposed > 0 || newPenaltyRecovered > 0 || newFishAuctionAmount > 0) {
-        // Create new penalty record
-        await prisma.penalty.create({
-          data: {
-            observationId: existing.id,
-            penaltyImposed: newPenaltyImposed,
-            penaltyRecovered: newPenaltyRecovered,
-            fishAuctionAmount: newFishAuctionAmount,
-          },
-        });
-      }
-    }
-
-    logger.debug(`Updated observation ${existing.id} with changes: ${JSON.stringify({ observationUpdates, penaltyUpdates })}`);
+    logger.debug(`Updated observation ${existing.id} with sheet values: detectedPenalty=${newDetectedPenalty}, penaltyImposed=${newPenaltyImposed}`);
 
     return 'updated';
   }

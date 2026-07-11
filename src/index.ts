@@ -81,6 +81,15 @@ if (env.isDevelopment) {
 // API routes
 app.use(env.apiPrefix, routes);
 
+// API base endpoint (for ELB health check)
+app.get(env.apiPrefix, (_req, res) => {
+  res.json({
+    success: true,
+    message: 'Drone Surveillance Dashboard API',
+    status: 'healthy',
+  });
+});
+
 // Root endpoint
 app.get('/', (_req, res) => {
   res.json({
