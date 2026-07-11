@@ -321,6 +321,9 @@ model Observation {
   ownerEmail           String?           @map("owner_email") @db.VarChar(255)
   ownerContact1        String?           @map("owner_contact_1") @db.VarChar(15)
   ownerContact2        String?           @map("owner_contact_2") @db.VarChar(15)
+  ownerAddress         String?           @map("owner_address") @db.VarChar(500)
+  ownerTaluka          String?           @map("owner_taluka") @db.VarChar(100)
+  ownerDistrict        String?           @map("owner_district") @db.VarChar(100)
 
   // Location details
   latitude             Decimal?          @db.Decimal(10, 8)
@@ -332,6 +335,8 @@ model Observation {
   observationDate      DateTime          @map("observation_date") @db.Date
   observationTime      DateTime?         @map("observation_time") @db.Time()
   observationDatetime  DateTime?         @map("observation_datetime")
+  hearingDate          DateTime?         @map("hearing_date") @db.Date
+  hearingTime          String?           @map("hearing_time") @db.VarChar(10) // HH:MM format
 
   // Distance
   distanceFromCoastKm  Decimal?          @map("distance_from_coast_km") @db.Decimal(6, 2)
@@ -355,6 +360,12 @@ model Observation {
   remarksAcf           String?           @map("remarks_acf") @db.Text
   remarksHo            String?           @map("remarks_ho") @db.Text
   internalNotes        String?           @map("internal_notes") @db.Text
+
+  // Trawling specific - depth in fathoms (वाव)
+  depth                String?           @db.VarChar(50) // e.g., "5", "10", "5-10"
+
+  // Act/Section under which violation occurred (कलम)
+  actKalam             String?           @map("act_kalam") @db.VarChar(200)
 
   // Source tracking
   sourceSheetName      String?           @map("source_sheet_name") @db.VarChar(100)

@@ -41,6 +41,9 @@ export interface CasePdfData {
 
   // Owner details
   ownerName: string;
+  ownerAddress?: string;
+  ownerTaluka?: string;
+  ownerDistrict?: string;
 
   // Location
   districtName: string;
@@ -53,6 +56,16 @@ export interface CasePdfData {
   violationTypeName: string;
   fishingLicenseTypeName?: string;
   observationDate: string;
+
+  // Trawling specific
+  depth?: string; // Depth in fathoms (वाव) - only for trawling violations
+
+  // Act/Section (कलम)
+  actKalam?: string;
+
+  // Hearing
+  hearingDate?: string;
+  hearingTime?: string;
 
   // Penalty
   processingFee: number;
@@ -105,21 +118,42 @@ function getOrdinal(n: number): string {
   return `${n}th`;
 }
 
+/**
+ * National Emblem of India - Load from file and convert to base64
+ */
+const NATIONAL_EMBLEM_PATH = path.join(__dirname, '../assets/national-emblem.png');
+
+function getNationalEmblemBase64(): string {
+  try {
+    const imageBuffer = fs.readFileSync(NATIONAL_EMBLEM_PATH);
+    return imageBuffer.toString('base64');
+  } catch (error) {
+    logger.warn('Could not load national emblem image:', error);
+    return ''; // Return empty string if file not found
+  }
+}
+
 // ============================================================
 // HTML TEMPLATE
 // ============================================================
 
 function generateHtmlTemplate(data: CasePdfData): string {
   const currentDate = data.currentDate || format(new Date(), 'dd/MM/yyyy');
+  const nationalEmblemBase64 = getNationalEmblemBase64();
   const observationDate = data.observationDate
     ? format(new Date(data.observationDate), 'dd/MM/yyyy')
     : currentDate;
 
-  // Hearing date is 7 days from now
-  const hearingDateObj = new Date();
-  hearingDateObj.setDate(hearingDateObj.getDate() + 7);
-  const hearingDate = format(hearingDateObj, 'dd/MM/yyyy');
-  const hearingTime = '11:00';
+  // Use provided hearing date/time or fallback to 7 days from now
+  let hearingDate: string;
+  if (data.hearingDate) {
+    hearingDate = format(new Date(data.hearingDate), 'dd/MM/yyyy');
+  } else {
+    const hearingDateObj = new Date();
+    hearingDateObj.setDate(hearingDateObj.getDate() + 7);
+    hearingDate = format(hearingDateObj, 'dd/MM/yyyy');
+  }
+  const hearingTime = data.hearingTime || '11:00';
 
   // Main document HTML
   let html = `
@@ -130,6 +164,7 @@ function generateHtmlTemplate(data: CasePdfData): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Case Document</title>
   <style>
+    /* Load Google Fonts as fallback - local fonts are preferred */
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;600;700&display=swap');
 
     * {
@@ -139,11 +174,15 @@ function generateHtmlTemplate(data: CasePdfData): string {
     }
 
     body {
-      font-family: 'Noto Sans Devanagari', 'Mangal', Arial, sans-serif;
+      /* Prioritize local Noto Sans Devanagari (installed on Docker), then Google Fonts, then Mangal */
+      font-family: 'Noto Sans Devanagari', 'Noto Sans', 'Mangal', 'Lohit Devanagari', 'Gargi', 'FreeSans', Arial, sans-serif;
       font-size: 11pt;
       line-height: 1.6;
       color: #000;
       background: #fff;
+      /* Ensure proper Devanagari text rendering */
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
     }
 
     .page {
@@ -389,7 +428,7 @@ function generateHtmlTemplate(data: CasePdfData): string {
     </div>
 
     <div class="meta-row">
-      <span>केस क्र. <strong>${data.caseNumber || 'XXXXX'}</strong>/2026</span>
+      <span>केस क्र. <strong>${data.caseNumber || 'XXXXX'}</strong></span>
       <span>दिनांक- <strong>${currentDate}</strong></span>
     </div>
 
@@ -423,8 +462,8 @@ function generateHtmlTemplate(data: CasePdfData): string {
         <span class="underline">${data.vesselName || '___________'}</span>
         क्रमांक <span class="underline">${data.registrationNumber || '___________'}</span> ही
         रेखांश <span class="underline">${data.longitude || '___________'}</span>,
-        अक्षांश <span class="underline">${data.latitude || '___________'}</span> या ठिकाणी
-        अनधिकृतरित्या पर्ससीन/एलईडी/ट्रॉलिंग/इतर पध्दतीने मासेमारी करित असल्याचे निदर्शनास आलेली आहे.
+        अक्षांश <span class="underline">${data.latitude || '___________'}</span> या ठिकाणी${data.depth ? ` <span class="underline">${data.depth}</span> इतक्या वावात` : ''}
+        अनधिकृतरित्या <strong>${data.violationTypeName || 'पर्ससीन/एलईडी/ट्रॉलिंग/इतर'}</strong> पध्दतीने मासेमारी करित असल्याचे निदर्शनास आलेली आहे.
       </p>
     </div>
 
@@ -451,13 +490,13 @@ function generateHtmlTemplate(data: CasePdfData): string {
             <td style="text-align: center;">1</td>
             <td>परवानाच्या अटी व शर्तिंचे उल्लंघन</td>
             <td style="text-align: center;">कलम 17 (३) (फ)</td>
-            <td style="text-align: center; font-weight: bold;">रू. ${formatInLakhs(data.totalPenalty)} लक्ष</td>
+            <td style="text-align: center; font-weight: bold;">रू. ${formatInLakhs(data.processingFee)} लक्ष</td>
           </tr>
           <tr>
             <td style="text-align: center;">2</td>
-            <td></td>
-            <td></td>
-            <td></td>
+            <td>${data.violationTypeName || ''}</td>
+            <td style="text-align: center;">${data.actKalam || ''}</td>
+            <td style="text-align: center; font-weight: bold;">रू. ${formatInLakhs(data.violationPenalty)} लक्ष</td>
           </tr>
           <tr class="total-row">
             <td colspan="2"></td>
@@ -477,6 +516,13 @@ function generateHtmlTemplate(data: CasePdfData): string {
     </div>
 
     <div class="footer-section">
+      ${data.signer ? `
+      <div style="margin-bottom: 5px;">
+        ${data.signer?.signatureImageBase64 ? `<img src="data:image/png;base64,${data.signer.signatureImageBase64}" alt="Signature" style="max-width: 120px; max-height: 50px;" />` : ''}
+        <p style="margin: 2px 0; font-size: 9pt; color: #1e40af;">🔒 Digitally Signed by: <strong>${data.signer?.name || 'Authorized Signatory'}</strong></p>
+        <p style="margin: 0; font-size: 8pt; color: #16a34a;">✓ Valid Certificate | ${currentDate}</p>
+      </div>
+      ` : ''}
       <p><strong>फिर्यादी तथा अंमलबजावणी अधिकारी</strong></p>
       <p>सहाय्यक मत्स्यव्यवसाय विकास अधिकारी (परवाना अधिकारी)</p>
     </div>
@@ -488,39 +534,53 @@ function generateHtmlTemplate(data: CasePdfData): string {
 
   <!-- Page 2: Hearing Notice Section (सुनावणी ची नोटिस) -->
   <div class="page">
-    <div class="govt-header">
-      <p>महाराष्ट्र शासन</p>
-      <p>मत्स्यव्यवसाय विभाग</p>
-    </div>
-
-      <div class="meta-row">
-        <span>अभिनिर्णय अधिकारी तथा सहाय्यक मत्स्यव्यवसाय जि.(<strong>${data.districtName || '___'}</strong>)</span>
-        <div class="text-right">
-          <p>केस क्र. <strong>${data.caseNumber || 'XXXXX'}</strong>/2026</p>
-          <p>दि. <strong>${currentDate}</strong></p>
-        </div>
-      </div>
+    <!-- Government Header Box with Emblem, Case Number, Date and Officer Text -->
+    <table style="width: 100%; border-collapse: collapse; border: 1px solid #000; margin-bottom: 15px;">
+      <tr>
+        <td style="text-align: center; padding: 15px; border: 1px solid #000;">
+          <img src="data:image/png;base64,${nationalEmblemBase64}" alt="National Emblem" style="width: 60px; height: auto; margin-bottom: 8px;" />
+          <p style="margin: 0; font-weight: bold; font-size: 14pt;">महाराष्ट्र शासन</p>
+          <p style="margin: 0; font-weight: bold; font-size: 12pt;">मत्स्यव्यवसाय विभाग</p>
+          <p style="margin: 8px 0 0 0;">अभिनिर्णय अधिकारी तथा सहाय्यक मत्स्यव्यवसाय जि.(<strong>${data.districtName || '___'}</strong>)</p>
+          <div style="display: flex; justify-content: space-between; margin-top: 8px; padding: 0 20px;">
+            <span>केस क्र. <strong>${data.caseNumber || 'XXXXX'}</strong></span>
+            <span>दि. <strong>${currentDate}</strong></span>
+          </div>
+        </td>
+      </tr>
+    </table>
 
       <div style="text-align: center; margin: 20px 0;">
         <h2 style="text-decoration: underline; font-size: 14pt;">सुनावणी ची नोटिस</h2>
       </div>
 
-      <div class="section">
-        <p>महाराष्ट्र शासनातर्फे फिर्यादी सहाय्यक आयुक्त मत्स्यव्यवसाय विकास अधिकारी</p>
-        <p>(अंमलबजावणी अधिकारी), तथा परवाना अधिकारी <strong>${data.flyingLocationName || '___________'}</strong></p>
-        <p class="text-right" style="font-weight: bold;">फीर्यादी</p>
-      </div>
+      <!-- Parties Table - फीर्यादी -->
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 15px; border: 1px solid #666;">
+        <tr>
+          <td style="width: 80%; vertical-align: middle; text-align: center; padding: 10px; border: 1px solid #666;">
+            <p style="margin: 0;">महाराष्ट्र शासनातर्फे फिर्यादी सहाय्यक आयुक्त मत्स्यव्यवसाय विकास अधिकारी</p>
+            <p style="margin: 0;">(अंमलबजावणी अधिकारी), तथा परवाना अधिकारी <strong>${data.flyingLocationName || '___________'}</strong></p>
+          </td>
+          <td style="width: 20%; vertical-align: middle; text-align: center; padding: 10px; border: 1px solid #666;">
+            <p style="margin: 0; font-weight: bold;">फीर्यादी</p>
+          </td>
+        </tr>
+      </table>
 
       <div class="vs-text">विरूध्द</div>
 
-      <div class="section">
-        <p>नाव: <span class="underline">${data.ownerName || '_______________'}</span>,
-           रा._______________ता.<strong>${data.flyingLocationName || '___'}</strong>
-           जि.<strong>${data.districtName || '___'}</strong></p>
-        <p>नौकेचे नाव : <span class="underline">${data.vesselName || '_______________'}</span>,
-           नौका क्र.<span class="underline">${data.registrationNumber || '_______________'}</span></p>
-        <p class="text-right" style="font-weight: bold;">सामनेवाला</p>
-      </div>
+      <!-- Parties Table - सामनेवाला -->
+      <table style="width: 100%; border-collapse: collapse; margin-top: 15px; border: 1px solid #666;">
+        <tr>
+          <td style="width: 80%; vertical-align: middle; text-align: center; padding: 10px; border: 1px solid #666;">
+            <p style="margin: 0;">नाव: <span class="underline">${data.ownerName || '_______________'}</span>, रा. <span class="underline">${data.ownerAddress || '_______________'}</span> ता. <strong>${data.ownerTaluka || data.flyingLocationName || '___'}</strong> जि. <strong>${data.ownerDistrict || data.districtName || '___'}</strong></p>
+            <p style="margin: 0;">नौकेचे नाव : <span class="underline">${data.vesselName || '_______________'}</span>, नौका क्र. <span class="underline">${data.registrationNumber || '_______________'}</span></p>
+          </td>
+          <td style="width: 20%; vertical-align: middle; text-align: center; padding: 10px; border: 1px solid #666;">
+            <p style="margin: 0; font-weight: bold;">सामनेवाला</p>
+          </td>
+        </tr>
+      </table>
 
       <div class="notice-box">
         <p style="font-weight: bold;">
@@ -546,44 +606,30 @@ function generateHtmlTemplate(data: CasePdfData): string {
         </p>
       </div>
 
-      <div class="section">
-        <p>ठिकाण - <strong>${data.districtName || '___________'}</strong></p>
-        <p>दिनांक - <strong>${currentDate}</strong></p>
-      </div>
-
-    <div class="footer-section" style="margin-top: 40px;">
-      <p><strong>(अभिनिर्णय अधिकारी)</strong></p>
-      <p>अभिनिर्णय अधिकारी तथा</p>
-      <p>सहाय्यक आयुक्त मत्स्यव्यवसाय (तां.)</p>
-    </div>
-
-    ${data.signer ? `
-    <div style="clear: both;"></div>
-    <div class="signature-box">
-      <div class="signature-header">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-          <path d="M9 12l2 2 4-4"/>
-        </svg>
-        <span>डिजिटल स्वाक्षरी / Digital Signature</span>
-      </div>
-      ${data.signer?.signatureImageBase64 ? `
-      <div style="text-align: center; margin: 10px 0;">
-        <img src="data:image/png;base64,${data.signer.signatureImageBase64}" alt="Signature" style="max-width: 150px; max-height: 60px;" />
-      </div>
-      ` : ''}
-      <div class="signature-details">
-        <p><strong>Signed by:</strong> ${data.signer?.name || 'SATYAWAN JADHAV'}</p>
-        <p><strong>Organization:</strong> ${data.signer?.organization || 'SCHNELL DRONE TECHNOLOGIES LTD'}</p>
-        ${data.signer?.designation ? `<p><strong>Designation:</strong> ${data.signer.designation}</p>` : ''}
-        <p><strong>Date:</strong> ${currentDate}</p>
-        <p><strong>Issuer:</strong> ${data.signer?.issuer || 'Verasys Sub CA 2022'}</p>
-        <p class="${data.signer?.isValid !== false ? 'signature-valid' : ''}" style="${data.signer?.isValid === false ? 'color: #dc2626;' : ''}">
-          ${data.signer?.isValid !== false ? '✓ Valid Certificate' : '⚠ Certificate Status Unknown'}
-        </p>
-      </div>
-    </div>
-    ` : ''}
+    <!-- Place and Date with Signature Section 2 - अभिनिर्णय अधिकारी -->
+    <table style="width: 100%; margin-top: 15px;">
+      <tr>
+        <td style="width: 50%; vertical-align: top;">
+          <p style="margin: 0;">ठिकाण - <strong>${data.districtName || '___________'}</strong></p>
+          <p style="margin: 0;">दिनांक - <strong>${currentDate}</strong></p>
+        </td>
+        <td style="width: 50%; vertical-align: top; text-align: right;">
+          <div style="display: inline-block; text-align: center;">
+            ${data.signer ? `
+            <div style="border: 1px solid #1e40af; border-radius: 6px; padding: 8px; background: #eff6ff; margin-bottom: 8px; font-size: 9pt;">
+              <p style="margin: 0; color: #1e40af; font-weight: bold; font-size: 8pt;">🔒 Digital Signature</p>
+              ${data.signer?.signatureImageBase64 ? `<img src="data:image/png;base64,${data.signer.signatureImageBase64}" alt="Signature" style="max-width: 100px; max-height: 40px; margin: 5px 0;" />` : ''}
+              <p style="margin: 2px 0; font-size: 8pt;"><strong>${data.signer?.name || 'Authorized Signatory'}</strong></p>
+              <p style="margin: 0; font-size: 7pt; color: #16a34a;">✓ Valid Certificate</p>
+            </div>
+            ` : ''}
+            <p style="margin: 0;"><strong>(अभिनिर्णय अधिकारी)</strong></p>
+            <p style="margin: 0;">अभिनिर्णय अधिकारी तथा</p>
+            <p style="margin: 0;">सहाय्यक आयुक्त मत्स्यव्यवसाय (तां.)</p>
+          </div>
+        </td>
+      </tr>
+    </table>
   </div>`;
 
   // Page 3: Evidence Images (if any)
@@ -741,8 +787,17 @@ class PdfService {
       // Generate HTML content
       const html = generateHtmlTemplate(data);
 
-      // Set content and wait for fonts to load
+      // Set content and wait for DOM to load
       await page.setContent(html, { waitUntil: 'domcontentloaded' });
+
+      // Wait for network to be idle (fonts loading from Google)
+      await page.waitForNetworkIdle({ idleTime: 500, timeout: 10000 }).catch(() => {
+        // Timeout is OK - local fonts will be used as fallback
+        logger.warn('Network idle timeout - using local fonts');
+      });
+
+      // Wait for fonts to be fully loaded and rendered
+      await page.evaluateHandle('document.fonts.ready');
 
       // Generate PDF
       const pdfBuffer = await page.pdf({

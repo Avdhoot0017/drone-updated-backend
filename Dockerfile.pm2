@@ -1,0 +1,131 @@
+# =============================================================================
+# Backend Dockerfile with PM2 - Drone Surveillance Dashboard
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Build
+# -----------------------------------------------------------------------------
+FROM node:22-slim AS builder
+
+WORKDIR /app
+
+# Install dependencies for native modules
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    openssl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Skip Puppeteer browser download
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
+# Copy package files
+COPY package*.json ./
+COPY prisma ./prisma/
+
+# Install all dependencies
+RUN npm ci
+
+# Generate Prisma client
+RUN npx prisma generate
+
+# Copy source code
+COPY . .
+
+# Build TypeScript
+RUN npm run build
+
+# -----------------------------------------------------------------------------
+# Stage 2: Production with PM2
+# -----------------------------------------------------------------------------
+FROM node:22-slim AS production
+
+WORKDIR /app
+
+# Install PM2 globally, dumb-init, Chromium, and fonts
+RUN apt-get update && apt-get install -y \
+    dumb-init \
+    openssl \
+    wget \
+    chromium \
+    fonts-liberation \
+    fonts-noto \
+    fonts-noto-core \
+    fonts-noto-extra \
+    fonts-noto-ui-core \
+    libappindicator3-1 \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    xdg-utils \
+    && npm install -g pm2 \
+    && fc-cache -f -v \
+    && rm -rf /var/lib/apt/lists/*
+
+# Puppeteer configuration
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Create non-root user
+RUN groupadd -g 1001 nodejs && \
+    useradd -u 1001 -g nodejs -m nodejs
+
+# Copy package files
+COPY package*.json ./
+COPY prisma ./prisma/
+
+# Install production dependencies and generate Prisma client
+RUN npm ci --only=production && \
+    npx prisma generate && \
+    npm cache clean --force
+
+# Copy built application from builder
+COPY --from=builder /app/dist ./dist
+
+# Copy PM2 ecosystem file
+COPY ecosystem.config.js ./
+
+# Copy startup script
+COPY --chown=nodejs:nodejs scripts/startup-pm2.sh ./startup.sh
+RUN chmod +x ./startup.sh
+
+# Copy service account
+RUN mkdir -p ./config
+COPY --chown=nodejs:nodejs src/config/service-account.json ./config/service-account.json
+
+# Create logs directory
+RUN mkdir -p ./logs && chown -R nodejs:nodejs ./logs
+
+# Set ownership
+RUN chown -R nodejs:nodejs /app
+
+# Environment variables
+ENV NODE_ENV=production
+ENV PORT=5001
+ENV TZ=Asia/Kolkata
+
+# Switch to non-root user
+USER nodejs
+
+# Expose port
+EXPOSE 5001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:5001/api/v1 || exit 1
+
+# Start with PM2
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["./startup.sh"]

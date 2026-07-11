@@ -22,6 +22,9 @@ const prisma = new PrismaClient();
 // ============================================================
 
 export interface CreateCaseInput {
+  // Case number (auto-generated but can be overridden)
+  caseNumber?: string;
+
   // Vessel details
   vesselName: string;
   vesselNumber: string;
@@ -32,6 +35,9 @@ export interface CreateCaseInput {
   ownerContact1: string;
   ownerContact2?: string;
   ownerEmail?: string;
+  ownerAddress?: string;
+  ownerTaluka?: string;
+  ownerDistrict?: string;
 
   // Location details
   enforcementAreaId: string;
@@ -43,9 +49,17 @@ export interface CreateCaseInput {
   violationTypeId: string;
   fishingLicenseTypeId?: string;
 
+  // Trawling specific
+  depth?: string; // Depth in fathoms (वाव) - only for trawling violations
+
+  // Act/Section (कलम)
+  actKalam?: string;
+
   // Date/Time
   observationDate: Date;
   observationTime?: string;
+  hearingDate?: Date;
+  hearingTime?: string;
 
   // Penalty (auto-calculated but can be overridden)
   penaltyAmount?: number;
@@ -350,8 +364,8 @@ class CaseService {
         true // manual case
       );
 
-      // Generate case number
-      const caseNumber = generateCaseNumber();
+      // Use provided case number or generate one
+      const caseNumber = input.caseNumber || generateCaseNumber();
 
       // Create observation (case) - coordinates already validated above
       const observation = await prisma.observation.create({
@@ -370,6 +384,9 @@ class CaseService {
           ownerContact1: input.ownerContact1,
           ownerContact2: input.ownerContact2,
           ownerEmail: input.ownerEmail,
+          ownerAddress: input.ownerAddress,
+          ownerTaluka: input.ownerTaluka,
+          ownerDistrict: input.ownerDistrict,
           latitude: input.latitude ? new Prisma.Decimal(Number(input.latitude)) : null,
           longitude: input.longitude ? new Prisma.Decimal(Number(input.longitude)) : null,
           observationDate: input.observationDate,
@@ -383,6 +400,10 @@ class CaseService {
                 observationTime.getMinutes()
               )
             : input.observationDate,
+          hearingDate: input.hearingDate,
+          hearingTime: input.hearingTime,
+          depth: input.depth,
+          actKalam: input.actKalam,
           offenceOccurrence: penaltyData.occurrence,
           penaltyAmount: new Prisma.Decimal(penaltyData.penaltyAmount),
           status: 'reported',

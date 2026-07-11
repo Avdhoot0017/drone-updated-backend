@@ -33,6 +33,7 @@ export async function createCase(req: AuthenticatedRequest, res: Response): Prom
 
   try {
     const input: CreateCaseInput = {
+      caseNumber: req.body.caseNumber,
       vesselName: req.body.vesselName,
       vesselNumber: req.body.registrationNumber,
       vesselTypeId: req.body.vesselTypeId,
@@ -40,14 +41,21 @@ export async function createCase(req: AuthenticatedRequest, res: Response): Prom
       ownerContact1: req.body.ownerContact1,
       ownerContact2: req.body.ownerContact2,
       ownerEmail: req.body.ownerEmail,
+      ownerAddress: req.body.ownerAddress,
+      ownerTaluka: req.body.ownerTaluka,
+      ownerDistrict: req.body.ownerDistrict,
       enforcementAreaId: req.body.enforcementAreaId,
       flyingLocationId: req.body.flyingLocationId,
       latitude: req.body.latitude,
       longitude: req.body.longitude,
       violationTypeId: req.body.violationTypeId,
       fishingLicenseTypeId: req.body.fishingLicenseTypeId,
+      depth: req.body.depth,
+      actKalam: req.body.actKalam,
       observationDate: new Date(req.body.observationDate),
       observationTime: req.body.observationTime,
+      hearingDate: req.body.hearingDate ? new Date(req.body.hearingDate) : undefined,
+      hearingTime: req.body.hearingTime,
       penaltyAmount: req.body.penaltyAmount,
       offenceOccurrence: req.body.offenceOccurrence,
       evidenceUrls: req.body.evidenceUrls,
@@ -196,21 +204,34 @@ export async function updateCase(req: AuthenticatedRequest, res: Response): Prom
   try {
     const { id } = req.params;
 
-    // Basic update - extend as needed
+    // Build update data - only include fields that are provided
+    const updateData: any = {};
+
+    if (req.body.ownerName !== undefined) updateData.ownerName = req.body.ownerName;
+    if (req.body.ownerContact1 !== undefined) updateData.ownerContact1 = req.body.ownerContact1;
+    if (req.body.ownerContact2 !== undefined) updateData.ownerContact2 = req.body.ownerContact2;
+    if (req.body.ownerEmail !== undefined) updateData.ownerEmail = req.body.ownerEmail;
+    if (req.body.ownerAddress !== undefined) updateData.ownerAddress = req.body.ownerAddress;
+    if (req.body.ownerTaluka !== undefined) updateData.ownerTaluka = req.body.ownerTaluka;
+    if (req.body.ownerDistrict !== undefined) updateData.ownerDistrict = req.body.ownerDistrict;
+    if (req.body.internalNotes !== undefined) updateData.internalNotes = req.body.internalNotes;
+    if (req.body.remarksAcf !== undefined) updateData.remarksAcf = req.body.remarksAcf;
+    if (req.body.caseNumber !== undefined) updateData.caseNumber = req.body.caseNumber;
+    if (req.body.hearingDate !== undefined) updateData.hearingDate = req.body.hearingDate ? new Date(req.body.hearingDate) : null;
+    if (req.body.hearingTime !== undefined) updateData.hearingTime = req.body.hearingTime;
+    if (req.body.depth !== undefined) updateData.depth = req.body.depth;
+    if (req.body.actKalam !== undefined) updateData.actKalam = req.body.actKalam;
+
     const result = await prisma.observation.update({
       where: { id },
-      data: {
-        ownerName: req.body.ownerName,
-        ownerContact1: req.body.ownerContact1,
-        ownerContact2: req.body.ownerContact2,
-        internalNotes: req.body.internalNotes,
-        remarksAcf: req.body.remarksAcf,
-      },
+      data: updateData,
       include: {
         enforcementArea: true,
         flyingLocation: true,
         vessel: true,
         violationType: true,
+        fishingLicenseType: true,
+        evidence: true,
       },
     });
 
@@ -874,9 +895,16 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
         ownerName: true,
         ownerContact1: true,
         ownerContact2: true,
+        ownerAddress: true,
+        ownerTaluka: true,
+        ownerDistrict: true,
         latitude: true,
         longitude: true,
         observationDate: true,
+        hearingDate: true,
+        hearingTime: true,
+        depth: true,
+        actKalam: true,
         penaltyAmount: true,
         offenceOccurrence: true,
         disposedBy: true,
@@ -897,14 +925,29 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
       return;
     }
 
-    // Get evidence image URLs
+    // Get evidence images as base64 for PDF embedding
     const imageUrls: string[] = [];
     for (const ev of observation.evidence) {
-      if (ev.s3Key) {
-        const url = await s3Service.getPresignedDownloadUrl(ev.s3Key);
-        if (url) imageUrls.push(url);
-      } else if (ev.evidenceUrl) {
-        imageUrls.push(ev.evidenceUrl);
+      try {
+        let imageUrl = '';
+        if (ev.s3Key) {
+          imageUrl = await s3Service.getPresignedDownloadUrl(ev.s3Key) || '';
+        } else if (ev.evidenceUrl) {
+          imageUrl = ev.evidenceUrl;
+        }
+
+        if (imageUrl) {
+          // Fetch image and convert to base64
+          const response = await fetch(imageUrl);
+          if (response.ok) {
+            const arrayBuffer = await response.arrayBuffer();
+            const base64 = Buffer.from(arrayBuffer).toString('base64');
+            const mimeType = ev.mimeType || 'image/jpeg';
+            imageUrls.push(`data:${mimeType};base64,${base64}`);
+          }
+        }
+      } catch (imgError) {
+        logger.warn(`Failed to fetch evidence image: ${ev.id}`, imgError);
       }
     }
 
@@ -939,6 +982,9 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
       vesselName: observation.originalVesselName || observation.vessel?.name || '',
       registrationNumber: observation.originalVesselReg || observation.vessel?.registrationNumber || '',
       ownerName: observation.ownerName || observation.vessel?.ownerName || '',
+      ownerAddress: observation.ownerAddress || undefined,
+      ownerTaluka: observation.ownerTaluka || undefined,
+      ownerDistrict: observation.ownerDistrict || undefined,
       districtName: observation.enforcementArea?.name || '',
       flyingLocationName: observation.flyingLocation?.name || '',
       latitude: observation.latitude?.toString() || '',
@@ -947,6 +993,10 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
       violationTypeName: observation.violationType?.name || '',
       fishingLicenseTypeName: observation.fishingLicenseType?.name || '',
       observationDate: format(observation.observationDate, 'yyyy-MM-dd'),
+      depth: observation.depth || undefined,
+      actKalam: observation.actKalam || undefined,
+      hearingDate: observation.hearingDate ? format(observation.hearingDate, 'yyyy-MM-dd') : undefined,
+      hearingTime: observation.hearingTime || undefined,
       processingFee: 20000, // Fixed processing fee
       violationPenalty: Math.max(0, Number(observation.penaltyAmount) - 20000),
       totalPenalty: Number(observation.penaltyAmount) || 0,
@@ -991,31 +1041,38 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
     // Check if emails should be sent (query param sendEmails=true)
     const sendEmails = req.query.sendEmails === 'true' || req.body.sendEmails === true;
     let emailResult = null;
+    let emailError = null;
 
     if (sendEmails && result.pdfBuffer) {
-      // Send emails to ACF, RDC, Commissioner, and Joint Commissioner
-      emailResult = await emailService.sendCaseNotificationEmails(
-        id,
-        {
-          caseNumber: pdfData.caseNumber || `CASE-${id.substring(0, 8)}`,
-          vesselName: pdfData.vesselName,
-          registrationNumber: pdfData.registrationNumber,
-          ownerName: pdfData.ownerName,
-          violationType: pdfData.violationTypeName,
-          districtName: pdfData.districtName,
-          observationDate: pdfData.observationDate,
-          penaltyAmount: pdfData.totalPenalty,
-          occurrence: pdfData.occurrence,
-        },
-        result.pdfBuffer,
-        pdfUrl || undefined
-      );
+      try {
+        // Send emails to ACF, RDC, Commissioner, and Joint Commissioner
+        emailResult = await emailService.sendCaseNotificationEmails(
+          id,
+          {
+            caseNumber: pdfData.caseNumber || `CASE-${id.substring(0, 8)}`,
+            vesselName: pdfData.vesselName,
+            registrationNumber: pdfData.registrationNumber,
+            ownerName: pdfData.ownerName,
+            violationType: pdfData.violationTypeName,
+            districtName: pdfData.districtName,
+            observationDate: pdfData.observationDate,
+            penaltyAmount: pdfData.totalPenalty,
+            occurrence: pdfData.occurrence,
+          },
+          result.pdfBuffer,
+          pdfUrl || undefined
+        );
 
-      logger.info(`Case emails sent for ${id}: ${emailResult.totalSent} sent, ${emailResult.totalFailed} failed`);
+        logger.info(`Case emails sent for ${id}: ${emailResult.totalSent} sent, ${emailResult.totalFailed} failed`);
+      } catch (err) {
+        logger.error('Error sending case notification emails:', err);
+        emailError = err instanceof Error ? err.message : 'Email sending failed';
+      }
     }
 
     // Send SMS and WhatsApp to vessel owner
     let smsWhatsAppResult = null;
+    let smsError = null;
     const ownerPhones: string[] = [];
     if (observation.ownerContact1) ownerPhones.push(observation.ownerContact1);
     if (observation.ownerContact2) ownerPhones.push(observation.ownerContact2);
@@ -1027,42 +1084,51 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
     const uniquePhones = [...new Set(ownerPhones.filter(p => p && p.trim()))];
 
     if (sendEmails && uniquePhones.length > 0) {
-      smsWhatsAppResult = await exotelService.sendOwnerNotifications(
-        uniquePhones,
-        {
-          caseNumber: pdfData.caseNumber || `CASE-${id.substring(0, 8)}`,
-          vesselName: pdfData.vesselName,
-          registrationNumber: pdfData.registrationNumber,
-          ownerName: pdfData.ownerName,
-          violationType: pdfData.violationTypeName,
-          districtName: pdfData.districtName,
-          observationDate: pdfData.observationDate,
-          penaltyAmount: pdfData.totalPenalty,
-          occurrence: pdfData.occurrence,
-        }
-      );
+      try {
+        smsWhatsAppResult = await exotelService.sendOwnerNotifications(
+          uniquePhones,
+          {
+            caseNumber: pdfData.caseNumber || `CASE-${id.substring(0, 8)}`,
+            vesselName: pdfData.vesselName,
+            registrationNumber: pdfData.registrationNumber,
+            ownerName: pdfData.ownerName,
+            violationType: pdfData.violationTypeName,
+            districtName: pdfData.districtName,
+            observationDate: pdfData.observationDate,
+            penaltyAmount: pdfData.totalPenalty,
+            occurrence: pdfData.occurrence,
+          }
+        );
 
-      logger.info(
-        `Owner notifications for ${id}: SMS ${smsWhatsAppResult.sms.sent}/${uniquePhones.length}, ` +
-        `WhatsApp ${smsWhatsAppResult.whatsapp.sent}/${uniquePhones.length}`
-      );
+        logger.info(
+          `Owner notifications for ${id}: SMS ${smsWhatsAppResult.sms.sent}/${uniquePhones.length}, ` +
+          `WhatsApp ${smsWhatsAppResult.whatsapp.sent}/${uniquePhones.length}`
+        );
+      } catch (err) {
+        logger.error('Error sending owner notifications:', err);
+        smsError = err instanceof Error ? err.message : 'SMS/WhatsApp sending failed';
+      }
     }
 
     // Update notice status
     if (sendEmails) {
-      await prisma.caseNotice.update({
-        where: { id: notice.id },
-        data: {
-          status: 'sent',
-          sentAt: new Date(),
-          emailSentAt: emailResult ? new Date() : undefined,
-          emailStatus: emailResult ? (emailResult.totalFailed === 0 ? 'sent' : 'partial') : undefined,
-          smsSentAt: smsWhatsAppResult?.sms.sent ? new Date() : undefined,
-          smsStatus: smsWhatsAppResult?.sms.sent ? (smsWhatsAppResult.sms.failed === 0 ? 'sent' : 'partial') : undefined,
-          whatsappSentAt: smsWhatsAppResult?.whatsapp.sent ? new Date() : undefined,
-          whatsappStatus: smsWhatsAppResult?.whatsapp.sent ? (smsWhatsAppResult.whatsapp.failed === 0 ? 'sent' : 'partial') : undefined,
-        },
-      });
+      try {
+        await prisma.caseNotice.update({
+          where: { id: notice.id },
+          data: {
+            status: 'sent',
+            sentAt: new Date(),
+            emailSentAt: emailResult ? new Date() : undefined,
+            emailStatus: emailResult ? (emailResult.totalFailed === 0 ? 'sent' : 'partial') : (emailError ? 'failed' : undefined),
+            smsSentAt: smsWhatsAppResult?.sms.sent ? new Date() : undefined,
+            smsStatus: smsWhatsAppResult?.sms.sent ? (smsWhatsAppResult.sms.failed === 0 ? 'sent' : 'partial') : (smsError ? 'failed' : undefined),
+            whatsappSentAt: smsWhatsAppResult?.whatsapp.sent ? new Date() : undefined,
+            whatsappStatus: smsWhatsAppResult?.whatsapp.sent ? (smsWhatsAppResult.whatsapp.failed === 0 ? 'sent' : 'partial') : undefined,
+          },
+        });
+      } catch (err) {
+        logger.error('Error updating notice status:', err);
+      }
     }
 
     res.json({
@@ -1076,8 +1142,10 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
         emailsSent: emailResult?.totalSent || 0,
         emailsFailed: emailResult?.totalFailed || 0,
         emailResults: emailResult?.results || [],
+        emailError: emailError || undefined,
         smsSent: smsWhatsAppResult?.sms.sent || 0,
         smsFailed: smsWhatsAppResult?.sms.failed || 0,
+        smsError: smsError || undefined,
         whatsappSent: smsWhatsAppResult?.whatsapp.sent || 0,
         whatsappFailed: smsWhatsAppResult?.whatsapp.failed || 0,
         signingWarning: result.signingWarning,
@@ -1109,6 +1177,9 @@ export async function generatePdfFromPreview(req: AuthenticatedRequest, res: Res
       violationTypeName,
       fishingLicenseTypeName,
       observationDate,
+      depth,
+      hearingDate,
+      hearingTime,
       processingFee,
       violationPenalty,
       totalPenalty,
@@ -1144,6 +1215,9 @@ export async function generatePdfFromPreview(req: AuthenticatedRequest, res: Res
       violationTypeName: violationTypeName || '',
       fishingLicenseTypeName: fishingLicenseTypeName || '',
       observationDate: observationDate || format(new Date(), 'yyyy-MM-dd'),
+      depth: depth || undefined,
+      hearingDate: hearingDate || undefined,
+      hearingTime: hearingTime || undefined,
       processingFee: processingFee || 20000,
       violationPenalty: violationPenalty || 0,
       totalPenalty: totalPenalty || (processingFee || 20000) + (violationPenalty || 0),

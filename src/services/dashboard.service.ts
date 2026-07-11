@@ -257,6 +257,12 @@ class DashboardService {
         pendingStatuses.includes(o.status)
       ).length;
 
+      // detectedPenalty is the penalty from the sheet/detected amount
+      const detectedPenalty = observations.reduce(
+        (sum, o) => sum + Number(o.detectedPenalty || 0),
+        0
+      );
+
       const penaltyImposed = observations.reduce(
         (sum, o) => sum + Number(o.penalty?.penaltyImposed || 0),
         0
@@ -273,6 +279,7 @@ class DashboardService {
         name: region.name,
         totalObservations: observations.length,
         uniqueVessels,
+        detectedPenalty,
         penaltyImposed,
         penaltyRecovered,
         pendingCases,

@@ -214,6 +214,34 @@ export function requireCaseAccess(
 }
 
 /**
+ * Authorization middleware for reports access (admin and member)
+ */
+export function requireReportsAccess(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): void {
+  if (!req.user) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required',
+    });
+    return;
+  }
+
+  const allowedRoles: UserRole[] = [UserRole.admin, UserRole.member];
+  if (!allowedRoles.includes(req.user.role as UserRole)) {
+    res.status(403).json({
+      success: false,
+      error: 'Reports access required (Admin or Member)',
+    });
+    return;
+  }
+
+  next();
+}
+
+/**
  * Optional authentication - doesn't fail if no token
  */
 export async function optionalAuth(

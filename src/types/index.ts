@@ -80,6 +80,7 @@ export interface SyncResult {
   updatedRecords: number;
   unchangedRecords: number;
   errors: number;
+  staleRecordsRemoved?: number;
   errorDetails: Array<{
     row: number;
     error: string;
@@ -126,6 +127,7 @@ export interface RegionStats {
   name: string;
   totalObservations: number;
   uniqueVessels: number;
+  detectedPenalty: number;
   penaltyImposed: number;
   penaltyRecovered: number;
   pendingCases: number;
